@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Car360 3D Scanner</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            touch-action: none;
+        }
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #0a0a0a;
+            color: white;
+            overflow: hidden;
+            position: fixed;
+            width: 100%;
+            height: 100%;
+        }
+        
+        .glass-panel {
+            background: rgba(20, 20, 20, 0.85);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .scan-ring {
+            position: absolute;
+            border: 3px solid rgba(59, 130, 246, 0.8);
+            border-radius: 50%;
+            animation: pulse-ring 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+        }
+        
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); opacity: 1; }
+            100% { transform: scale(1.5); opacity: 0; }
+        }
+        
+        .capture-flash {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: white;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.1s;
+            z-index: 9999;
+        }
+        
+        .flash-active {
+            opacity: 1;
+        }
+        
+        .progress-bar {
+            background: linear-gradient(90deg, #3b82f6 0%, #8b5cf6 100%);
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+        
+        .hidden { display: none !important; }
+        
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        
+        .ui-layer {
+            position: relative;
+            z-index: 10;
+            pointer-events: none;
+        }
+        
+        .ui-layer > * {
+            pointer-events: auto;
+        }
+        
+        .camera-feed {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: 5;
+            transform: scaleX(-1);
+        }
+        
+        .guide-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at center, transparent 30%, rgba(0,0,0,0.8) 70%);
+            z-index: 6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .car-silhouette {
+            width: 280px;
+            height: 120px;
+            border: 2px dashed rgba(255,255,255,0.3);
+            border-radius: 60px 60px 20px 20px;
+            position: relative;
+        }
+        
+        .angle-indicator {
+            position: absolute;
+            bottom: -40px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 14px;
+            color: rgba(255,255,255,0.6);
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.4);
+        }
+        
+        .btn-primary:active {
+            transform: scale(0.95);
+        }
+        
+        .model-preview {
+            filter: drop-shadow(0 20px 40px rgba(0,0,0,0.5));
+        }
+        
+        .loading-spinner {
+            border: 3px solid rgba(255,255,255,0.1);
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .feature-point {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            background: #3b82f6;
+            border-radius: 50%;
+            box-shadow: 0 0 10px #3b82f6;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Flash Effect -->
+    <div id="flash" class="capture-flash"></div>
+
+    <!-- 3D Canvas (for visualization mode) -->
+    <div id="canvas-container" class="hidden"></div>
+
+    <!-- Camera Feed (for capture mode) -->
+    <video id="camera-feed" class="camera-feed hidden" autoplay playsinline></video>
+    <canvas id="capture-canvas" class="hidden"></canvas>
+
+    <!-- Guide Overlay -->
+    <div id="guide-overlay" class="guide-overlay hidden">
+        <div class="text-center">
+            <div class="car-silhouette mb-4">
+                <div class="scan-ring" style="width: 100%; height: 100%; top: 0; left: 0;"></div>
+            </div>
+            <div class="angle-indicator" id="angle-text">0°</div>
+            <p class="text-white/80 text-sm mt-8">Mova-se ao redor do veículo</p>
+        </div>
+    </div>
+
+    <!-- UI Layer -->
+    <div class="ui-layer flex flex-col justify-between h-full p-6">
+        
+        <!-- Header -->
+        <div class="flex justify-between items-start">
+            <div class="glass-panel rounded-2xl p-4">
+                <h1 class="text-xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+                    Car360 3D
+                </h1>
+                <p class="text-xs text-white/60 mt-1">Scanner Fotogramétrico</p>
+            </div>
+            
+            <div id="capture-counter" class="glass-panel rounded-full px-4 py-2 hidden">
+                <span class="text-sm font-semibold" id="photo-count">0/36</span>
+            </div>
+        </div>
+
+        <!-- Progress Bar (Processing) -->
+        <div id="processing-panel" class="hidden glass-panel rounded-2xl p-6 mx-4 mb-4">
+            <div class="flex items-center justify-between mb-3">
+                <span class="text-sm font-medium">Processando modelo 3D...</span>
+                <span class="text-sm text-blue-400" id="progress-text">0%</span>
+            </div>
+            <div class="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+                <div id="progress-fill" class="progress-bar w-0"></div>
+            </div>
+            <p class="text-xs text-white/50 mt-3">Structure from Motion + Neural Radiance Fields</p>
+        </div>
+
+        <!-- Controls -->
+        <div class="flex flex-col gap-4 items-center pb-8">
+            
+            <!-- Start Screen -->
+            <div id="start-screen" class="text-center w-full">
+                <div class="glass-panel rounded-3xl p-8 mb-6 mx-4">
+                    <div class="w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mx-auto mb-4 flex items-center justify-center text-3xl">
+                        🚗
+                    </div>
+                    <h2 class="text-2xl font-bold mb-2">Capture seu veículo</h2>
+                    <p class="text-white/60 text-sm mb-6">
+                        Tire 36 fotos ao redor do carro para gerar um modelo 3D interativo
+                    </p>
+                    <div class="space-y-3 text-left text-sm text-white/70 mb-6">
+                        <div class="flex items-center gap-3">
+                            <div class="w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400">1</div>
+                            <span>Posicione-se a 2-3 metros do veículo</span>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400">2</div>
+                            <span>Capture em círculo completo (360°)</span>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400">3</div>
+                            <span>Mantenha a câmera na altura do capô</span>
+                        </div>
+                    </div>
+                </div>
+                <button onclick="startCapture()" class="btn-primary w-full max-w-sm py-4 rounded-2xl font-semibold text-lg transition-transform active:scale-95">
+                    Iniciar Captura
+                </button>
+            </div>
+
+            <!-- Capture Controls -->
+            <div id="capture-controls" class="hidden w-full flex flex-col items-center gap-4">
+                <div class="flex items-center gap-4">
+                    <button onclick="capturePhoto()" class="w-20 h-20 rounded-full bg-white border-4 border-white/30 flex items-center justify-center shadow-2xl active:scale-95 transition-transform">
+                        <div class="w-16 h-16 rounded-full bg-white border-2 border-gray-300"></div>
+                    </button>
+                </div>
+                <p class="text-white/60 text-sm">Toque para capturar</p>
+                <button onclick="finishCapture()" class="mt-4 text-white/60 text-sm underline">
+                    Concluir captura
+                </button>
+            </div>
+
+            <!-- 3D Viewer Controls -->
+            <div id="viewer-controls" class="hidden w-full">
+                <div class="glass-panel rounded-2xl p-4 mb-4 flex justify-around">
+                    <button onclick="setViewMode('rotate')" class="flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-white/10 transition">
+                        <span class="text-xl">🔄</span>
+                        <span class="text-xs">Rotacionar</span>
+                    </button>
+                    <button onclick="setViewMode('zoom')" class="flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-white/10 transition">
+                        <span class="text-xl">🔍</span>
+                        <span class="text-xs">Zoom</span>
+                    </button>
+                    <button onclick="setViewMode('paint')" class="flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-white/10 transition">
+                        <span class="text-xl">🎨</span>
+                        <span class="text-xs">Cores</span>
+                    </button>
+                    <button onclick="resetCapture()" class="flex flex-col items-center gap-1 p-2 rounded-lg hover:bg-white/10 transition text-red-400">
+                        <span class="text-xl">🗑️</span>
+                        <span class="text-xs">Novo</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Feature Points Overlay -->
+    <div id="feature-points" class="absolute inset-0 pointer-events-none z-20 hidden"></div>
+
+    <script>
+        // State Management
+        let state = {
+            mode: 'start', // start, capture, processing, viewer
+            photos: [],
+            currentAngle: 0,
+            targetPhotos: 36,
+            camera: null,
+            stream: null,
+            scene: null,
+            renderer: null,
+            carMesh: null,
+            isDragging: false,
+            previousMousePosition: { x: 0, y: 0 },
+            rotationSpeed: 0.005
+        };
+
+        // Initialize Camera
+        async function initCamera() {
+            try {
+                state.stream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        facingMode: 'environment',
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 }
+                    },
+                    audio: false
+                });
+                
+                const video = document.getElementById('camera-feed');
+                video.srcObject = state.stream;
+                
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        resolve(video);
+                    };
+                });
+            } catch (err) {
+                alert('Erro ao acessar câmera: ' + err.message);
+                throw err;
+            }
+        }
+
+        // Start Capture Mode
+        async function startCapture() {
+            state.mode = 'capture';
+            state.photos = [];
+            state.currentAngle = 0;
+            
+            document.getElementById('start-screen').classList.add('hidden');
+            document.getElementById('capture-controls').classList.remove('hidden');
+            document.getElementById('guide-overlay').classList.remove('hidden');
+            document.getElementById('capture-counter').classList.remove('hidden');
+            document.getElementById('camera-feed').classList.remove('hidden');
+            
+            await initCamera();
+            updateAngleIndicator();
+        }
+
+        // Capture Photo
+        function capturePhoto() {
+            if (state.photos.length >= state.targetPhotos) return;
+            
+            const video = document.getElementById('camera-feed');
+            const canvas = document.getElementById('capture-canvas');
+            const ctx = canvas.getContext('2d');
+            
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0);
+            
+            // Add flash effect
+            const flash = document.getElementById('flash');
+            flash.classList.add('flash-active');
+            setTimeout(() => flash.classList.remove('flash-active'), 100);
+            
+            // Save photo data
+            const photoData = canvas.toDataURL('image/jpeg', 0.9);
+            state.photos.push({
+                data: photoData,
+                angle: state.currentAngle,
+                timestamp: Date.now()
+            });
+            
+            // Update UI
+            document.getElementById('photo-count').textContent = 
+                `${state.photos.length}/${state.targetPhotos}`;
+            
+            // Simulate feature detection visualization
+            showFeaturePoints();
+            
+            // Auto-rotate guide
+            state.currentAngle += 360 / state.targetPhotos;
+            if (state.currentAngle >= 360) state.currentAngle = 0;
+            updateAngleIndicator();
+            
+            // Check if complete
+            if (state.photos.length === state.targetPhotos) {
+                setTimeout(finishCapture, 500);
+            }
+        }
+
+        function updateAngleIndicator() {
+            document.getElementById('angle-text').textContent = 
+                Math.round(state.currentAngle) + '°';
+        }
+
+        function showFeaturePoints() {
+            const container = document.getElementById('feature-points');
+            container.innerHTML = '';
+            container.classList.remove('hidden');
+            
+            // Simulate feature detection points
+            for (let i = 0; i < 8; i++) {
+                const point = document.createElement('div');
+                point.className = 'feature-point';
+                point.style.left = (30 + Math.random() * 40) + '%';
+                point.style.top = (30 + Math.random() * 40) + '%';
+                point.style.animation = `pulse-ring 0.5s ease-out ${i * 0.1}s`;
+                container.appendChild(point);
+            }
+            
+            setTimeout(() => {
+                container.classList.add('hidden');
+            }, 1000);
+        }
+
+        // Finish Capture & Process
+        async function finishCapture() {
+            if (state.photos.length < 8) {
+                alert('Capture pelo menos 8 fotos para gerar o modelo 3D');
+                return;
+            }
+            
+            state.mode = 'processing';
+            
+            // UI Updates
+            document.getElementById('capture-controls').classList.add('hidden');
+            document.getElementById('guide-overlay').classList.add('hidden');
+            document.getElementById('camera-feed').classList.add('hidden');
+            document.getElementById('capture-counter').classList.add('hidden');
+            document.getElementById('processing-panel').classList.remove('hidden');
+            
+            // Stop camera
+            if (state.stream) {
+                state.stream.getTracks().forEach(track => track.stop());
+            }
+            
+            // Simulate processing with progress
+            await process3DModel();
+        }
+
+        // Simulate 3D Processing
+        async function process3DModel() {
+            const steps = [
+                { pct: 10, text: 'Detectando pontos de interesse...' },
+                { pct: 25, text: 'Structure from Motion...' },
+                { pct: 45, text: 'Gerando nuvem de pontos...' },
+                { pct: 60, text: 'Criando malha 3D...' },
+                { pct: 80, text: 'Aplicando texturas...' },
+                { pct: 95, text: 'Otimizando modelo...' },
+                { pct: 100, text: 'Concluído!' }
+            ];
+            
+            for (let step of steps) {
+                await new Promise(r => setTimeout(r, 800));
+                document.getElementById('progress-fill').style.width = step.pct + '%';
+                document.getElementById('progress-text').textContent = step.pct + '%';
+                document.querySelector('#processing-panel span:first-child').textContent = step.text;
+            }
+            
+            await new Promise(r => setTimeout(r, 500));
+            init3DViewer();
+        }
+
+        // Initialize Three.js 3D Viewer
+        function init3DViewer() {
+            state.mode = 'viewer';
+            document.getElementById('processing-panel').classList.add('hidden');
+            document.getElementById('viewer-controls').classList.remove('hidden');
+            document.getElementById('canvas-container').classList.remove('hidden');
+            
+            const container = document.getElementById('canvas-container');
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            
+            // Scene
+            state.scene = new THREE.Scene();
+            state.scene.background = new THREE.Color(0x1a1a1a);
+            state.scene.fog = new THREE.Fog(0x1a1a1a, 10, 50);
+            
+            // Camera
+            state.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
+            state.camera.position.set(8, 4, 8);
+            state.camera.lookAt(0, 0, 0);
+            
+            // Renderer
+            state.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            state.renderer.setSize(width, height);
+            state.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            state.renderer.shadowMap.enabled = true;
+            state.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(state.renderer.domElement);
+            
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+            state.scene.add(ambientLight);
+            
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+            dirLight.position.set(5, 10, 7);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            state.scene.add(dirLight);
+            
+            const spotLight = new THREE.SpotLight(0x3b82f6, 0.8);
+            spotLight.position.set(-5, 8, -5);
+            spotLight.lookAt(0, 0, 0);
+            state.scene.add(spotLight);
+            
+            // Create Procedural Car Model
+            createProceduralCar();
+            
+            // Ground
+            const groundGeometry = new THREE.PlaneGeometry(50, 50);
+            const groundMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x0a0a0a,
+                roughness: 0.8,
+                metalness: 0.2
+            });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = -0.5;
+            ground.receiveShadow = true;
+            state.scene.add(ground);
+            
+            // Grid
+            const gridHelper = new THREE.GridHelper(50, 50, 0x333333, 0x111111);
+            gridHelper.position.y = -0.49;
+            state.scene.add(gridHelper);
+            
+            // Controls
+            setup3DControls();
+            
+            // Animation Loop
+            animate();
+            
+            // Handle Resize
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        function createProceduralCar() {
+            const carGroup = new THREE.Group();
+            
+            // Materials
+            const bodyMaterial = new THREE.MeshStandardMaterial({
+                color: 0x3b82f6,
+                metalness: 0.7,
+                roughness: 0.2,
+                envMapIntensity: 1.0
+            });
+            
+            const glassMaterial = new THREE.MeshStandardMaterial({
+                color: 0x111111,
+                metalness: 0.9,
+                roughness: 0.0,
+                transparent: true,
+                opacity: 0.9
+            });
+            
+            const wheelMaterial = new THREE.MeshStandardMaterial({
+                color: 0x1a1a1a,
+                roughness: 0.9
+            });
+            
+            // Car Body (simplified sedan shape)
+            const bodyGeometry = new THREE.BoxGeometry(4.5, 1.2, 2);
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.y = 0.8;
+            body.castShadow = true;
+            body.receiveShadow = true;
+            carGroup.add(body);
+            
+            // Cabin
+            const cabinGeometry = new THREE.BoxGeometry(2.5, 0.8, 1.8);
+            const cabin = new THREE.Mesh(cabinGeometry, glassMaterial);
+            cabin.position.set(-0.2, 1.8, 0);
+            cabin.castShadow = true;
+            carGroup.add(cabin);
+            
+            // Wheels
+            const wheelGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 32);
+            wheelGeometry.rotateZ(Math.PI / 2);
+            
+            const positions = [
+                { x: 1.5, z: 0.9 },
+                { x: 1.5, z: -0.9 },
+                { x: -1.5, z: 0.9 },
+                { x: -1.5, z: -0.9 }
+            ];
+            
+            positions.forEach(pos => {
+                const wheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
+                wheel.position.set(pos.x, 0.4, pos.z);
+                wheel.castShadow = true;
+                carGroup.add(wheel);
+            });
+            
+            // Headlights
+            const headlightGeometry = new THREE.BoxGeometry(0.2, 0.3, 0.6);
+            const headlightMaterial = new THREE.MeshStandardMaterial({
+                color: 0xffffff,
+                emissive: 0xffffff,
+                emissiveIntensity: 0.5
+            });
+            
+            const leftHeadlight = new THREE.Mesh(headlightGeometry, headlightMaterial);
+            leftHeadlight.position.set(2.3, 1, 0.6);
+            carGroup.add(leftHeadlight);
+            
+            const rightHeadlight = new THREE.Mesh(headlightGeometry, headlightMaterial);
+            rightHeadlight.position.set(2.3, 1, -0.6);
+            carGroup.add(rightHeadlight);
+            
+            // Taillights
+            const taillightMaterial = new THREE.MeshStandardMaterial({
+                color: 0xff0000,
+                emissive: 0xff0000,
+                emissiveIntensity: 0.5
+            });
+            
+            const leftTaillight = new THREE.Mesh(headlightGeometry, taillightMaterial);
+            leftTaillight.position.set(-2.3, 1, 0.6);
+            carGroup.add(leftTaillight);
+            
+            const rightTaillight = new THREE.Mesh(headlightGeometry, taillightMaterial);
+            rightTaillight.position.set(-2.3, 1, -0.6);
+            carGroup.add(rightTaillight);
+            
+            state.carMesh = carGroup;
+            state.scene.add(carGroup);
+            
+            // Add photo planes around car to simulate photogrammetry result
+            addPhotoSpheres();
+        }
+
+        function addPhotoSpheres() {
+            // Create a visual representation of the captured photos
+            const radius = 6;
+            state.photos.forEach((photo, index) => {
+                const angle = (index / state.photos.length) * Math.PI * 2;
+                const x = Math.cos(angle) * radius;
+                const z = Math.sin(angle) * radius;
+                
+                // Create a small plane showing the photo
+                const geometry = new THREE.PlaneGeometry(1.5, 1);
+                const texture = new THREE.TextureLoader().load(photo.data);
+                const material = new THREE.MeshBasicMaterial({ 
+                    map: texture,
+                    side: THREE.DoubleSide,
+                    transparent: true,
+                    opacity: 0.6
+                });
+                
+                const plane = new THREE.Mesh(geometry, material);
+                plane.position.set(x, 2, z);
+                plane.lookAt(0, 2, 0);
+                state.scene.add(plane);
+                
+                // Add point light at photo position
+                const light = new THREE.PointLight(0xffffff, 0.3, 5);
+                light.position.set(x, 3, z);
+                state.scene.add(light);
+            });
+        }
+
+        function setup3DControls() {
+            const container = document.getElementById('canvas-container');
+            
+            // Touch/Mouse events
+            container.addEventListener('touchstart', onTouchStart, { passive: false });
+            container.addEventListener('touchmove', onTouchMove, { passive: false });
+            container.addEventListener('touchend', onTouchEnd);
+            
+            container.addEventListener('mousedown', onMouseDown);
+            container.addEventListener('mousemove', onMouseMove);
+            container.addEventListener('mouseup', onMouseUp);
+            container.addEventListener('wheel', onWheel);
+        }
+
+        function onTouchStart(e) {
+            if (e.touches.length === 1) {
+                state.isDragging = true;
+                state.previousMousePosition = {
+                    x: e.touches[0].clientX,
+                    y: e.touches[0].clientY
+                };
+            }
+        }
+
+        function onTouchMove(e) {
+            if (!state.isDragging) return;
+            e.preventDefault();
+            
+            const deltaX = e.touches[0].clientX - state.previousMousePosition.x;
+            const deltaY = e.touches[0].clientY - state.previousMousePosition.y;
+            
+            rotateCamera(deltaX, deltaY);
+            
+            state.previousMousePosition = {
+                x: e.touches[0].clientX,
+                y: e.touches[0].clientY
+            };
+        }
+
+        function onTouchEnd() {
+            state.isDragging = false;
+        }
+
+        function onMouseDown(e) {
+            state.isDragging = true;
+            state.previousMousePosition = {
+                x: e.clientX,
+                y: e.clientY
+            };
+        }
+
+        function onMouseMove(e) {
+            if (!state.isDragging) return;
+            
+            const deltaX = e.clientX - state.previousMousePosition.x;
+            const deltaY = e.clientY - state.previousMousePosition.y;
+            
+            rotateCamera(deltaX, deltaY);
+            
+            state.previousMousePosition = {
+                x: e.clientX,
+                y: e.clientY
+            };
+        }
+
+        function onMouseUp() {
+            state.isDragging = false;
+        }
+
+        function onWheel(e) {
+            const zoomSpeed = 0.1;
+            const minDist = 4;
+            const maxDist = 15;
+            
+            const direction = state.camera.position.clone().normalize();
+            const distance = state.camera.position.length();
+            
+            let newDistance = distance + (e.deltaY > 0 ? zoomSpeed : -zoomSpeed) * distance;
+            newDistance = Math.max(minDist, Math.min(maxDist, newDistance));
+            
+            state.camera.position.copy(direction.multiplyScalar(newDistance));
+        }
+
+        function rotateCamera(deltaX, deltaY) {
+            const sensitivity = 0.005;
+            
+            // Horizontal rotation (around Y axis)
+            const theta = deltaX * sensitivity;
+            const x = state.camera.position.x;
+            const z = state.camera.position.z;
+            state.camera.position.x = x * Math.cos(theta) - z * Math.sin(theta);
+            state.camera.position.z = x * Math.sin(theta) + z * Math.cos(theta);
+            
+            // Vertical rotation (around X axis)
+            const phi = deltaY * sensitivity;
+            const y = state.camera.position.y;
+            const currentRadius = Math.sqrt(x*x + z*z);
+            let newY = y + deltaY * 0.01;
+            newY = Math.max(0.5, Math.min(10, newY));
+            state.camera.position.y = newY;
+            
+            state.camera.lookAt(0, 0, 0);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            if (state.mode === 'viewer' && state.carMesh && !state.isDragging) {
+                // Auto-rotate slowly
+                state.carMesh.rotation.y += 0.002;
+            }
+            
+            if (state.renderer && state.scene && state.camera) {
+                state.renderer.render(state.scene, state.camera);
+            }
+        }
+
+        function onWindowResize() {
+            if (!state.camera || !state.renderer) return;
+            
+            state.camera.aspect = window.innerWidth / window.innerHeight;
+            state.camera.updateProjectionMatrix();
+            state.renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Viewer Controls
+        function setViewMode(mode) {
+            if (!state.carMesh) return;
+            
+            switch(mode) {
+                case 'rotate':
+                    // Reset to auto-rotation
+                    break;
+                case 'zoom':
+                    // Zoom to front view
+                    animateCameraTo(5, 2, 0);
+                    break;
+                case 'paint':
+                    // Change car color randomly
+                    const colors = [0x3b82f6, 0xef4444, 0x10b981, 0xf59e0b, 0x8b5cf6, 0x111111, 0xffffff];
+                    const randomColor = colors[Math.floor(Math.random() * colors.length)];
+                    state.carMesh.children[0].material.color.setHex(randomColor);
+                    break;
+            }
+        }
+
+        function animateCameraTo(x, y, z) {
+            const start = state.camera.position.clone();
+            const end = new THREE.Vector3(x, y, z);
+            const duration = 1000;
+            const startTime = Date.now();
+            
+            function update() {
+                const elapsed = Date.now() - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const ease = 1 - Math.pow(1 - progress, 3);
+                
+                state.camera.position.lerpVectors(start, end, ease);
+                state.camera.lookAt(0, 0, 0);
+                
+                if (progress < 1) {
+                    requestAnimationFrame(update);
+                }
+            }
+            update();
+        }
+
+        function resetCapture() {
+            // Reset everything
+            state.mode = 'start';
+            state.photos = [];
+            state.currentAngle = 0;
+            
+            if (state.renderer) {
+                state.renderer.dispose();
+                document.getElementById('canvas-container').innerHTML = '';
+            }
+            
+            document.getElementById('canvas-container').classList.add('hidden');
+            document.getElementById('viewer-controls').classList.add('hidden');
+            document.getElementById('start-screen').classList.remove('hidden');
+            document.getElementById('photo-count').textContent = '0/36';
+        }
+
+        // Prevent default touch behaviors
+        document.addEventListener('touchmove', function(e) {
+            if (state.mode === 'viewer') e.preventDefault();
+        }, { passive: false });
+        
+        // Prevent pull-to-refresh
+        document.body.style.overscrollBehavior = 'none';
+    </script>
+</body>
+</html>
