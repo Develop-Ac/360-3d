@@ -1,13 +1,9 @@
-FROM nginx:alpine
+FROM python:3.11-slim
 
-# remove config default
-RUN rm -rf /usr/share/nginx/html/*
+WORKDIR /app
 
-# copia arquivos do projeto
-COPY . /usr/share/nginx/html
+COPY . /app
 
-# expõe porta
-EXPOSE 80
+EXPOSE 8080
 
-# inicia nginx
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["python", "-m", "http.server", "8080"]
